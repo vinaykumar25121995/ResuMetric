@@ -1,0 +1,6 @@
+{
+  "name": "ResuMetric — AI ATS Resume Builder & Career Suite",
+  "description": "Enterprise ATS Resume Builder with 24+ professional templates, real-time keyword scoring, Job Description scanner, AI cover letter generator, multi-language resume parsing, PDF/DOCX export, and admin analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
