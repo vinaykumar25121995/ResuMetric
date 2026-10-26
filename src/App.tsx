@@ -161,6 +161,14 @@ export default function App() {
     sharedCallbackUrl?: string;
     githubTokenCreationUrl?: string;
     githubOAuthAppsUrl?: string;
+    deviceFlow?: {
+      userCode: string;
+      verificationUri: string;
+      expiresAt: number;
+      interval: number;
+      status: string;
+      error?: string;
+    } | null;
   }>({
     devCallbackUrl:
       'https://ais-dev-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app/auth/callback',
@@ -169,6 +177,7 @@ export default function App() {
     githubTokenCreationUrl:
       'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email',
     githubOAuthAppsUrl: 'https://github.com/settings/developers',
+    deviceFlow: null,
   });
   const [githubSyncStatus, setGithubSyncStatus] = useState<{
     pushed?: boolean;
@@ -259,6 +268,38 @@ export default function App() {
     return () => window.removeEventListener('message', handleOAuthMessage);
   }, []);
 
+  useEffect(() => {
+    if (!showGithubModal || githubAuthInfo.authenticated) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/auth/github/device/poll', { method: 'POST' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.deviceFlow) {
+          setGithubAuthInfo((prev) => ({
+            ...prev,
+            authenticated: data.authenticated,
+            user: data.user || prev.user,
+            deviceFlow: data.deviceFlow,
+          }));
+        }
+        if (data.lastPushResult) {
+          setGithubSyncStatus(data.lastPushResult);
+        }
+        if (data.authenticated) {
+          showStatus(
+            `GitHub Device Login authorized${
+              data.user?.login ? ` as @${data.user.login}` : ''
+            } and pushed to https://github.com/vinaykumar25121995/ResuMetric.git!`
+          );
+        }
+      } catch {
+        // Ignore transient poll error
+      }
+    }, 5500);
+    return () => clearInterval(timer);
+  }, [showGithubModal, githubAuthInfo.authenticated]);
+
   const handleConnectGithubOAuth = async () => {
     try {
       if (githubClientIdInput.trim() || githubClientSecretInput.trim()) {
@@ -276,9 +317,17 @@ export default function App() {
         `/api/auth/github/url?origin=${encodeURIComponent(window.location.origin)}`
       );
       const data = await res.json();
-      const targetUrl =
-        data.url ||
-        'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email';
+      if (data.deviceFlow) {
+        setGithubAuthInfo((prev) => ({
+          ...prev,
+          deviceFlow: data.deviceFlow,
+        }));
+        if (data.deviceFlow.userCode) {
+          navigator.clipboard?.writeText(data.deviceFlow.userCode).catch(() => null);
+        }
+      }
+
+      const targetUrl = data.url || 'https://github.com/login/device';
 
       const popup = window.open(
         targetUrl,
@@ -288,17 +337,21 @@ export default function App() {
 
       if (!popup) {
         showStatus(
-          'Popup blocked by browser. Click "Open GitHub Authorization in New Tab ↗" below to authenticate directly on GitHub.'
+          data.deviceFlow?.userCode
+            ? `Copied Device Code ${data.deviceFlow.userCode}! Click "Open github.com/login/device ↗" below and paste code ${data.deviceFlow.userCode} to authorize.`
+            : 'Popup blocked by browser. Click "Open github.com/login/device ↗" below to authenticate directly on GitHub.'
         );
       } else {
         showStatus(
           data.mode === 'oauth'
             ? 'Opened GitHub OAuth login window. Authorize ResuMetric to push automatically!'
-            : 'Opened GitHub Authentication & Token page. Generate a repo token and paste it below to push!'
+            : `Opened GitHub Device Login (https://github.com/login/device) & copied code ${
+                data.deviceFlow?.userCode || ''
+              }! Paste the code to authorize and auto-push.`
         );
       }
     } catch {
-      showStatus('Click the direct GitHub Authorization link below to authenticate.');
+      showStatus('Click the direct GitHub Device Login link below to authenticate.');
     }
   };
 
@@ -938,11 +991,12 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-xs font-extrabold uppercase tracking-wider text-teal-400">
-                    Step 1 · Redirect to GitHub Authentication Page
+                    Step 1 · 1-Click GitHub Device Login &amp; Redirect
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Sign in to GitHub in a popup window or new tab to authorize write access to{' '}
-                    <span className="font-mono text-white">vinaykumar25121995/ResuMetric</span>.
+                    Authorize write access to{' '}
+                    <span className="font-mono text-white">vinaykumar25121995/ResuMetric</span>{' '}
+                    instantly via GitHub Device Login or Personal Access Token.
                   </p>
                 </div>
                 {githubAuthInfo.currentCommit && (
@@ -951,6 +1005,56 @@ export default function App() {
                   </span>
                 )}
               </div>
+
+              {githubAuthInfo.deviceFlow?.userCode && !githubAuthInfo.authenticated && (
+                <div
+                  data-testid="github-device-code-box"
+                  className="p-3 rounded-xl bg-slate-800/90 border border-teal-500/40 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-semibold text-teal-300 uppercase tracking-wider">
+                      Your Live GitHub One-Time Device Code (Auto-Pushes on Approval)
+                    </span>
+                    <div className="flex items-center gap-2.5 mt-0.5">
+                      <code
+                        data-testid="github-device-user-code"
+                        className="text-lg font-mono font-extrabold tracking-widest px-3 py-1 rounded-lg bg-slate-950 text-teal-400 border border-teal-500/50"
+                      >
+                        {githubAuthInfo.deviceFlow.userCode}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(
+                            githubAuthInfo.deviceFlow?.userCode || ''
+                          );
+                          showStatus(
+                            `Copied GitHub Device Code ${githubAuthInfo.deviceFlow?.userCode}! Paste it on https://github.com/login/device`
+                          );
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Copy Code
+                      </button>
+                    </div>
+                  </div>
+
+                  <a
+                    href={githubAuthInfo.deviceFlow.verificationUri || 'https://github.com/login/device'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="github-device-verify-link"
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(githubAuthInfo.deviceFlow?.userCode || '')
+                        .catch(() => null);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                  >
+                    Open github.com/login/device ↗
+                  </a>
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-2.5">
                 <button

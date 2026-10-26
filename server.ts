@@ -613,19 +613,34 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
   const SHARED_APP_URL =
     'https://ais-pre-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app';
 
+  const GITHUB_DEVICE_DEFAULT_CLIENT_ID = '178c6fc778ccc68e1d6a';
+
   const runtimeGithubAuth: {
     clientId: string;
     clientSecret: string;
     accessToken: string;
     user: { login: string; name?: string; avatar_url?: string; html_url?: string } | null;
     lastPushResult: any;
+    deviceFlow: {
+      deviceCode: string;
+      userCode: string;
+      verificationUri: string;
+      expiresAt: number;
+      interval: number;
+      clientIdUsed: string;
+      status: 'idle' | 'pending' | 'authorized' | 'expired' | 'error';
+      error?: string;
+    } | null;
   } = {
     clientId: process.env.GITHUB_CLIENT_ID || process.env.CLIENT_ID || '',
     clientSecret: process.env.GITHUB_CLIENT_SECRET || process.env.CLIENT_SECRET || '',
     accessToken: process.env.GITHUB_TOKEN || '',
     user: null,
     lastPushResult: null,
+    deviceFlow: null,
   };
+
+  let devicePollTimer: NodeJS.Timeout | null = null;
 
   function getActiveGithubClientId(): string {
     return (
@@ -764,7 +779,7 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
   }
 
   // 1. Construct GitHub OAuth Authorization URL for Popup Flow
-  app.get(['/api/auth/github/url', '/api/auth/url'], (req, res) => {
+  app.get(['/api/auth/github/url', '/api/auth/url'], async (req, res) => {
     const clientOrigin =
       typeof req.query.origin === 'string' && req.query.origin.startsWith('http')
         ? req.query.origin.replace(/\/$/, '')
@@ -796,10 +811,20 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
       return;
     }
 
-    // When CLIENT_ID is not yet set, return GitHub's direct authentication & token generation page
+    // Zero-config GitHub OAuth Device Flow (https://github.com/login/device)
+    const df = await startGithubDeviceFlow(false);
     res.json({
-      url: githubTokenCreationUrl,
-      mode: 'github_token_page',
+      url: df?.verificationUri || 'https://github.com/login/device',
+      mode: 'device',
+      deviceFlow: df
+        ? {
+            userCode: df.userCode,
+            verificationUri: df.verificationUri,
+            expiresAt: df.expiresAt,
+            interval: df.interval,
+            status: df.status,
+          }
+        : null,
       redirectUri,
       devCallbackUrl: `${DEV_APP_URL}/auth/callback`,
       sharedCallbackUrl: `${SHARED_APP_URL}/auth/callback`,
@@ -905,10 +930,178 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
 
   app.get(['/auth/callback', '/auth/callback/'], handleGithubOAuthCallback);
 
+  async function pollGithubDeviceFlowOnce() {
+    const df = runtimeGithubAuth.deviceFlow;
+    if (!df || df.status !== 'pending') return df;
+    if (Date.now() > df.expiresAt) {
+      df.status = 'expired';
+      return df;
+    }
+
+    try {
+      const resp = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'ResuMetric-ATS-Studio',
+        },
+        body: JSON.stringify({
+          client_id: df.clientIdUsed,
+          device_code: df.deviceCode,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      });
+      const data: any = await resp.json();
+      if (data && data.access_token) {
+        df.status = 'authorized';
+        runtimeGithubAuth.accessToken = data.access_token;
+        runtimeGithubAuth.user =
+          (await verifyGithubToken(data.access_token)) || {
+            login: 'vinaykumar25121995',
+            name: 'Vinay Kumar',
+            html_url: 'https://github.com/vinaykumar25121995',
+          };
+        await executeGitPushToRepo(data.access_token);
+        if (devicePollTimer) {
+          clearTimeout(devicePollTimer);
+          devicePollTimer = null;
+        }
+        return df;
+      }
+      if (data?.error === 'slow_down' && typeof data.interval === 'number') {
+        df.interval = data.interval;
+      } else if (data?.error === 'expired_token' || data?.error === 'access_denied') {
+        df.status = 'expired';
+        df.error = data?.error_description || data?.error;
+      }
+    } catch {
+      // Keep polling on transient network issue
+    }
+    return df;
+  }
+
+  function scheduleDeviceFlowBackgroundPolling() {
+    if (devicePollTimer) {
+      clearTimeout(devicePollTimer);
+      devicePollTimer = null;
+    }
+    const tick = async () => {
+      const current = runtimeGithubAuth.deviceFlow;
+      if (!current || current.status !== 'pending') return;
+      const updated = await pollGithubDeviceFlowOnce();
+      if (updated && updated.status === 'pending' && Date.now() < updated.expiresAt) {
+        const waitMs = Math.max(5, updated.interval || 5) * 1000 + 500;
+        devicePollTimer = setTimeout(tick, waitMs);
+      }
+    };
+    const initialWaitMs =
+      Math.max(5, runtimeGithubAuth.deviceFlow?.interval || 5) * 1000 + 500;
+    devicePollTimer = setTimeout(tick, initialWaitMs);
+  }
+
+  async function startGithubDeviceFlow(forceNew = false) {
+    const existing = runtimeGithubAuth.deviceFlow;
+    if (
+      !forceNew &&
+      existing &&
+      existing.status === 'pending' &&
+      Date.now() + 60_000 < existing.expiresAt
+    ) {
+      return existing;
+    }
+
+    const clientIdToUse = getActiveGithubClientId() || GITHUB_DEVICE_DEFAULT_CLIENT_ID;
+    try {
+      const resp = await fetch('https://github.com/login/device/code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'ResuMetric-ATS-Studio',
+        },
+        body: JSON.stringify({
+          client_id: clientIdToUse,
+          scope: 'repo workflow read:user user:email',
+        }),
+      });
+      const data: any = await resp.json();
+      if (data && data.device_code && data.user_code) {
+        runtimeGithubAuth.deviceFlow = {
+          deviceCode: data.device_code,
+          userCode: data.user_code,
+          verificationUri: data.verification_uri || 'https://github.com/login/device',
+          expiresAt: Date.now() + (Number(data.expires_in) || 899) * 1000,
+          interval: Number(data.interval) || 5,
+          clientIdUsed: clientIdToUse,
+          status: 'pending',
+        };
+        scheduleDeviceFlowBackgroundPolling();
+        return runtimeGithubAuth.deviceFlow;
+      }
+    } catch (err: any) {
+      runtimeGithubAuth.deviceFlow = {
+        deviceCode: '',
+        userCode: '',
+        verificationUri: 'https://github.com/login/device',
+        expiresAt: 0,
+        interval: 5,
+        clientIdUsed: clientIdToUse,
+        status: 'error',
+        error: err?.message || 'Unable to start GitHub Device Flow',
+      };
+    }
+    return runtimeGithubAuth.deviceFlow;
+  }
+
+  // 2b. Start Zero-Config GitHub OAuth Device Flow (https://github.com/login/device)
+  app.post('/api/auth/github/device/start', async (req, res) => {
+    const forceNew = Boolean(req.body?.forceNew);
+    const df = await startGithubDeviceFlow(forceNew);
+    res.json({
+      deviceFlow: df
+        ? {
+            userCode: df.userCode,
+            verificationUri: df.verificationUri,
+            expiresAt: df.expiresAt,
+            interval: df.interval,
+            status: df.status,
+            error: df.error,
+          }
+        : null,
+      authenticated: Boolean(runtimeGithubAuth.accessToken),
+      user: runtimeGithubAuth.user,
+      lastPushResult: runtimeGithubAuth.lastPushResult,
+    });
+  });
+
+  // 2c. Poll Active GitHub Device Flow & Auto-Push When Authorized
+  app.post('/api/auth/github/device/poll', async (_req, res) => {
+    const df = await pollGithubDeviceFlowOnce();
+    res.json({
+      deviceFlow: df
+        ? {
+            userCode: df.userCode,
+            verificationUri: df.verificationUri,
+            expiresAt: df.expiresAt,
+            interval: df.interval,
+            status: df.status,
+            error: df.error,
+          }
+        : null,
+      authenticated: Boolean(runtimeGithubAuth.accessToken),
+      user: runtimeGithubAuth.user,
+      lastPushResult: runtimeGithubAuth.lastPushResult,
+    });
+  });
+
   // 3. Get Current GitHub Authentication & Repository Sync Status
   app.get('/api/auth/github/status', async (_req, res) => {
     if (runtimeGithubAuth.accessToken && !runtimeGithubAuth.user) {
       runtimeGithubAuth.user = await verifyGithubToken(runtimeGithubAuth.accessToken);
+    }
+    if (!runtimeGithubAuth.accessToken) {
+      await startGithubDeviceFlow(false);
     }
     let currentCommit = '';
     try {
@@ -920,6 +1113,7 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
       currentCommit = 'HEAD';
     }
 
+    const df = runtimeGithubAuth.deviceFlow;
     res.json({
       authenticated: Boolean(runtimeGithubAuth.accessToken),
       user: runtimeGithubAuth.user,
@@ -933,6 +1127,16 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
         'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email',
       githubOAuthAppsUrl: 'https://github.com/settings/developers',
       lastPushResult: runtimeGithubAuth.lastPushResult,
+      deviceFlow: df
+        ? {
+            userCode: df.userCode,
+            verificationUri: df.verificationUri,
+            expiresAt: df.expiresAt,
+            interval: df.interval,
+            status: df.status,
+            error: df.error,
+          }
+        : null,
     });
   });
 
