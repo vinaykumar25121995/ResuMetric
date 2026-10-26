@@ -1,0 +1,224 @@
+{
+  "fullName": "Vinay Kumar",
+  "jobTitle": "Data Analyst",
+  "email": "vinay22y95@gmail.com",
+  "phone": "9288134190, 7488134190",
+  "location": "Gurugram, Haryana, India",
+  "website": "vinaykr.netlify.app",
+  "linkedin": "linkedin.com/in/vinay-kumar-yr95",
+  "github": "github.com/vinaykumar28yr",
+  "avatarInitials": "VK",
+  "summary": "Data analyst with **6+ years** of experience who turns messy spreadsheets into decisions a manager can act on. Writes **SQL and Python**, builds **Tableau dashboards**, and puts together quick **Excel** models. Project work spans sales, finance, supply chain, and customer behavior, including demand forecasting, and **machine learning models** that predict outcomes across **8+ projects**. Comfortable explaining findings to nontechnical audiences.",
+  "experiences": [
+    {
+      "id": "exp-1",
+      "role": "Data Analyst",
+      "company": "Neelam Cycle",
+      "location": "Jharkhand",
+      "period": "February 2020 – Present",
+      "bullets": [
+        "Analyzed business and operational records in **SQL and Excel** to spot sales trends and process improvements.",
+        "Identified the main causes of product damage and recommended fixes that **cut damage by 75%**.",
+        "Developed **predictive models** on market trends to guide stock levels and inventory planning, contributing to a **12% revenue increase**.",
+        "Applied **machine learning** to EV operations, **building regression models** that forecast delays for parts and vehicles from shipment and vendor records and giving the supply chain team early warning.",
+        "Presented findings to **non-technical stakeholders** through **Tableau dashboards**.",
+        "Segmented customers to clear excess stock and sharpen sell-through."
+      ]
+    },
+    {
+      "id": "exp-2",
+      "role": "Data Analyst Trainee",
+      "company": "Cuvette Tech",
+      "location": "Remote",
+      "period": "June 2025 – September 2025",
+      "bullets": [
+        "Completed **10+ hands-on projects** in **4 months** across **business analysis, visualization, and predictive modeling**.",
+        "Wrote **80+ SQL queries** and produced **50+ Excel reports** with formulas and PivotTables.",
+        "Trained a classification model that predicts hotel cancellations with **80% accuracy**.",
+        "Designed **70+ interactive Tableau dashboards** covering population, profitability, margins, and shipping speed."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-1",
+      "title": "TOP 2000 COMPANIES FINANCIAL ANALYSIS",
+      "techTag": "Excel",
+      "bullets": [
+        "Examined financial metrics across **2,000 companies** using **formulas and PivotTables**.",
+        "Spotted outliers and recurring patterns that point to business-relevant trends."
+      ]
+    },
+    {
+      "id": "proj-2",
+      "title": "GLOBAL RETAIL SALES ANALYSIS",
+      "techTag": "Excel",
+      "bullets": [
+        "Compared regional sales to gauge business performance.",
+        "Built **interactive dashboards** to monitor sales results at a glance."
+      ]
+    },
+    {
+      "id": "proj-3",
+      "title": "OLYMPICS DATA ANALYSIS",
+      "techTag": "SQL",
+      "bullets": [
+        "Queried athlete performance, medal tallies, and country participation.",
+        "**Organized raw records into clean result sets** for easy comparison."
+      ]
+    },
+    {
+      "id": "proj-4",
+      "title": "BIKE STORE SALES ANALYSIS",
+      "techTag": "SQL",
+      "bullets": [
+        "Studied seasonal sales trends and buying patterns across product categories.",
+        "Highlighted how different products and customer groups performed."
+      ]
+    },
+    {
+      "id": "proj-5",
+      "title": "WORLD POPULATION ANALYSIS",
+      "techTag": "Tableau",
+      "bullets": [
+        "Visualized demographic shifts, growth rates, and regional comparisons.",
+        "Made the **visuals interactive** so viewers can explore trends themselves."
+      ]
+    },
+    {
+      "id": "proj-6",
+      "title": "SUPERSTORE SALES & PROFIT DASHBOARD",
+      "techTag": "Tableau",
+      "bullets": [
+        "Designed a **dashboard tracking sales, profit margins, and shipping performance**.",
+        "Surfaced business trends and performance patterns in one view."
+      ]
+    },
+    {
+      "id": "proj-7",
+      "title": "HOTEL BOOKING CANCELLATION PREDICTION",
+      "techTag": "Machine Learning",
+      "bullets": [
+        "Trained a **logistic regression model** to predict booking cancellations with **80% accuracy**.",
+        "Explored booking data to find patterns behind cancellations."
+      ]
+    },
+    {
+      "id": "proj-8",
+      "title": "DELIVERY DELAY PREDICTION",
+      "techTag": "Machine Learning",
+      "bullets": [
+        "**Developed a regression model** that forecasts delivery delays from shipment and vendor data.",
+        "Supported proactive supply-chain planning with the predictions."
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "sk-1",
+      "category": "Languages",
+      "items": "Python, SQL",
+      "skillLevels": {
+        "Python": "Expert",
+        "SQL": "Expert"
+      }
+    },
+    {
+      "id": "sk-2",
+      "category": "Machine Learning",
+      "items": "Classification, Regression, Logistic Regression, Predictive Modeling",
+      "skillLevels": {
+        "Classification": "Expert",
+        "Regression": "Expert",
+        "Logistic Regression": "Expert",
+        "Predictive Modeling": "Proficient"
+      }
+    },
+    {
+      "id": "sk-3",
+      "category": "Visualization & BI",
+      "items": "Tableau, Looker Studio, Dashboard Development",
+      "skillLevels": {
+        "Tableau": "Expert",
+        "Looker Studio": "Proficient",
+        "Dashboard Development": "Expert"
+      }
+    },
+    {
+      "id": "sk-4",
+      "category": "Excel",
+      "items": "Formulas, PivotTables",
+      "skillLevels": {
+        "Formulas": "Expert",
+        "PivotTables": "Expert"
+      }
+    },
+    {
+      "id": "sk-5",
+      "category": "Analysis",
+      "items": "Data Cleaning, Exploratory Analysis, Trend Analysis, Customer Segmentation, Forecasting",
+      "skillLevels": {
+        "Data Cleaning": "Expert",
+        "Exploratory Analysis": "Expert",
+        "Trend Analysis": "Expert",
+        "Customer Segmentation": "Proficient",
+        "Forecasting": "Proficient"
+      }
+    }
+  ],
+  "certificates": [
+    {
+      "id": "cert-1",
+      "name": "Data Science Course Certificate",
+      "date": "September 2025"
+    },
+    {
+      "id": "cert-2",
+      "name": "Excel Module Completion Certificate",
+      "date": "September 2025"
+    },
+    {
+      "id": "cert-3",
+      "name": "SQL Module Completion Certificate",
+      "date": "September 2025"
+    },
+    {
+      "id": "cert-4",
+      "name": "Tableau Module Completion Certificate",
+      "date": "September 2025"
+    },
+    {
+      "id": "cert-5",
+      "name": "Machine Learning Module Completion Certificate",
+      "date": "September 2025"
+    }
+  ],
+  "education": [
+    {
+      "id": "edu-1",
+      "degree": "Bachelor of Engineering in Information Technology",
+      "institution": "University Institute of Technology, University of Burdwan",
+      "period": "July 2014 to June 2018"
+    }
+  ],
+  "languages": [
+    {
+      "id": "lang-1",
+      "language": "English",
+      "proficiency": "Fluent",
+      "levelPercent": 95
+    },
+    {
+      "id": "lang-2",
+      "language": "Hindi",
+      "proficiency": "Native",
+      "levelPercent": 100
+    },
+    {
+      "id": "lang-3",
+      "language": "Bangla",
+      "proficiency": "Proficient",
+      "levelPercent": 85
+    }
+  ]
+}
