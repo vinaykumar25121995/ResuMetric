@@ -147,8 +147,29 @@ export default function App() {
   const [autoFormatAnalysis, setAutoFormatAnalysis] =
     useState<AutoFormatLayoutAnalysis | null>(null);
   const [isPushingGithub, setIsPushingGithub] = useState(false);
-  const [showGithubModal, setShowGithubModal] = useState(false);
+  const [showGithubModal, setShowGithubModal] = useState(true);
   const [githubPatInput, setGithubPatInput] = useState('');
+  const [githubClientIdInput, setGithubClientIdInput] = useState('');
+  const [githubClientSecretInput, setGithubClientSecretInput] = useState('');
+  const [showOAuthSetupFields, setShowOAuthSetupFields] = useState(false);
+  const [githubAuthInfo, setGithubAuthInfo] = useState<{
+    authenticated?: boolean;
+    user?: { login: string; name?: string; avatar_url?: string; html_url?: string } | null;
+    hasOAuthClientConfig?: boolean;
+    currentCommit?: string;
+    devCallbackUrl?: string;
+    sharedCallbackUrl?: string;
+    githubTokenCreationUrl?: string;
+    githubOAuthAppsUrl?: string;
+  }>({
+    devCallbackUrl:
+      'https://ais-dev-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app/auth/callback',
+    sharedCallbackUrl:
+      'https://ais-pre-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app/auth/callback',
+    githubTokenCreationUrl:
+      'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email',
+    githubOAuthAppsUrl: 'https://github.com/settings/developers',
+  });
   const [githubSyncStatus, setGithubSyncStatus] = useState<{
     pushed?: boolean;
     stagedAndCommitted?: boolean;
@@ -156,6 +177,7 @@ export default function App() {
     repoUrl?: string;
     message?: string;
     requiresToken?: boolean;
+    detail?: string;
   } | null>(null);
 
   const showStatus = (msg: string) => {
@@ -198,10 +220,103 @@ export default function App() {
     );
   };
 
+  const fetchGithubAuthStatus = async () => {
+    try {
+      const res = await fetch('/api/auth/github/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      setGithubAuthInfo(data);
+      if (data.lastPushResult) {
+        setGithubSyncStatus(data.lastPushResult);
+      }
+    } catch {
+      // Ignore non-blocking status check
+    }
+  };
+
+  useEffect(() => {
+    fetchGithubAuthStatus();
+    const handleOAuthMessage = (event: MessageEvent) => {
+      const origin = event.origin || '';
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
+        return;
+      }
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        fetchGithubAuthStatus();
+        if (event.data?.pushResult) {
+          setGithubSyncStatus(event.data.pushResult);
+        }
+        showStatus(
+          `GitHub authenticated${
+            event.data?.user?.login ? ` as @${event.data.user.login}` : ''
+          } and synced with https://github.com/vinaykumar25121995/ResuMetric.git!`
+        );
+      } else if (event.data?.type === 'OAUTH_AUTH_ERROR' && event.data?.error) {
+        showStatus(`GitHub OAuth note: ${event.data.error}`);
+      }
+    };
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, []);
+
+  const handleConnectGithubOAuth = async () => {
+    try {
+      if (githubClientIdInput.trim() || githubClientSecretInput.trim()) {
+        await fetch('/api/auth/github/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientId: githubClientIdInput,
+            clientSecret: githubClientSecretInput,
+          }),
+        });
+      }
+
+      const res = await fetch(
+        `/api/auth/github/url?origin=${encodeURIComponent(window.location.origin)}`
+      );
+      const data = await res.json();
+      const targetUrl =
+        data.url ||
+        'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email';
+
+      const popup = window.open(
+        targetUrl,
+        'github_oauth_popup',
+        'width=640,height=740,menubar=no,toolbar=no'
+      );
+
+      if (!popup) {
+        showStatus(
+          'Popup blocked by browser. Click "Open GitHub Authorization in New Tab ↗" below to authenticate directly on GitHub.'
+        );
+      } else {
+        showStatus(
+          data.mode === 'oauth'
+            ? 'Opened GitHub OAuth login window. Authorize ResuMetric to push automatically!'
+            : 'Opened GitHub Authentication & Token page. Generate a repo token and paste it below to push!'
+        );
+      }
+    } catch {
+      showStatus('Click the direct GitHub Authorization link below to authenticate.');
+    }
+  };
+
   const handlePushToGithub = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setIsPushingGithub(true);
     try {
+      if (githubClientIdInput.trim() || githubClientSecretInput.trim()) {
+        await fetch('/api/auth/github/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientId: githubClientIdInput,
+            clientSecret: githubClientSecretInput,
+          }),
+        });
+      }
+
       const res = await fetch('/api/github/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -212,13 +327,14 @@ export default function App() {
       });
       const data = await res.json();
       setGithubSyncStatus(data);
+      fetchGithubAuthStatus();
       if (data.pushed) {
         showStatus(
-          `Pushed commit ${data.commitHash} to https://github.com/vinaykumar25121995/ResuMetric.git!`
+          `Successfully authenticated & pushed commit ${data.commitHash} to https://github.com/vinaykumar25121995/ResuMetric.git!`
         );
       } else if (data.stagedAndCommitted) {
         showStatus(
-          `Staged & committed all data (${data.commitHash}) for https://github.com/vinaykumar25121995/ResuMetric.git.`
+          `Staged & committed all data (${data.commitHash}). Authenticate with GitHub to complete remote HTTPS push.`
         );
       }
     } catch {
@@ -771,37 +887,126 @@ export default function App() {
         </div>
       )}
 
-      {/* GitHub Repository Sync Modal */}
+      {/* GitHub Authentication & Repository Push Portal Modal */}
       {showGithubModal && (
-        <div className="no-print fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-6 shadow-xl flex flex-col gap-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Globe className="w-5 h-5 text-teal-600" />
-                  GitHub Repository Sync — ResuMetric
-                </h3>
-                <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                  https://github.com/vinaykumar25121995/ResuMetric.git
-                </p>
+        <div
+          data-testid="github-auth-modal"
+          className="no-print fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-2xl w-full p-6 shadow-2xl flex flex-col gap-4 my-auto">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3.5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                  <Globe className="w-5 h-5 text-teal-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-extrabold text-slate-900">
+                      GitHub Authentication &amp; Repository Push
+                    </h3>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                        githubAuthInfo.authenticated || githubSyncStatus?.pushed
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-900 border border-amber-300'
+                      }`}
+                    >
+                      {githubAuthInfo.authenticated || githubSyncStatus?.pushed
+                        ? `Authenticated${
+                            githubAuthInfo.user?.login ? ` (@${githubAuthInfo.user.login})` : ''
+                          }`
+                        : 'Awaiting GitHub Authorization'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5 font-mono">
+                    Target Remote: https://github.com/vinaykumar25121995/ResuMetric.git (branch: main)
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
+                data-testid="close-github-modal-btn"
                 onClick={() => setShowGithubModal(false)}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-900"
+                className="px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
               >
                 Close
               </button>
             </div>
 
+            {/* Step 1: 1-Click Redirect / Popup to Official GitHub Authentication Page */}
+            <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-teal-400">
+                    Step 1 · Redirect to GitHub Authentication Page
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Sign in to GitHub in a popup window or new tab to authorize write access to{' '}
+                    <span className="font-mono text-white">vinaykumar25121995/ResuMetric</span>.
+                  </p>
+                </div>
+                {githubAuthInfo.currentCommit && (
+                  <span className="font-mono text-[11px] px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-teal-300">
+                    Local HEAD: {githubAuthInfo.currentCommit}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  data-testid="github-oauth-connect-btn"
+                  onClick={handleConnectGithubOAuth}
+                  className="px-4 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs inline-flex items-center gap-2 shadow-sm transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" />
+                  Redirect to GitHub Authentication (Popup)
+                </button>
+
+                <a
+                  href={
+                    githubAuthInfo.githubTokenCreationUrl ||
+                    'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email'
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="github-direct-token-link"
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
+                >
+                  Open GitHub Token Auth Page in New Tab ↗
+                </a>
+
+                <a
+                  href="https://github.com/login?return_to=%2Fvinaykumar25121995%2FResuMetric"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-xs inline-flex items-center gap-1 transition-colors"
+                >
+                  GitHub Sign In ↗
+                </a>
+              </div>
+            </div>
+
+            {/* Live Push Status Banner */}
             {githubSyncStatus && (
-              <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-900">
-                    Status:{' '}
+              <div
+                data-testid="github-sync-status-box"
+                className={`p-3.5 rounded-xl border text-xs flex flex-col gap-1.5 ${
+                  githubSyncStatus.pushed
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                    : 'bg-amber-50 border-amber-300 text-amber-950'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2
+                      className={`w-4 h-4 shrink-0 ${
+                        githubSyncStatus.pushed ? 'text-emerald-600' : 'text-amber-600'
+                      }`}
+                    />
                     {githubSyncStatus.pushed
-                      ? 'Pushed to Remote (origin/main)'
-                      : 'Committed Locally & Staged for origin/main'}
+                      ? 'Successfully Pushed to Remote (origin/main)'
+                      : 'Committed Locally & Ready for Authenticated Push'}
                   </span>
                   {githubSyncStatus.commitHash && (
                     <span className="font-mono px-2 py-0.5 rounded bg-slate-900 text-white text-[11px]">
@@ -809,38 +1014,159 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <p className="text-slate-600 leading-relaxed">{githubSyncStatus.message}</p>
+                <p className="leading-relaxed">{githubSyncStatus.message}</p>
               </div>
             )}
 
-            <form onSubmit={handlePushToGithub} className="flex flex-col gap-3">
-              <div>
-                <label htmlFor="gh-pat-input" className="block text-xs font-semibold text-slate-700 mb-1">
-                  GitHub Personal Access Token (Optional — required only if remote requests HTTPS write auth)
-                </label>
+            {/* Step 2: Paste GitHub Token or Configure OAuth Client ID/Secret to Complete Push */}
+            <form onSubmit={handlePushToGithub} className="flex flex-col gap-3.5">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="gh-pat-input"
+                    className="text-xs font-extrabold text-slate-900"
+                  >
+                    Step 2 · Paste GitHub Access Token to Authenticate &amp; Push Immediately
+                  </label>
+                  <span className="text-[11px] text-teal-700 font-semibold">
+                    Scope required: repo
+                  </span>
+                </div>
                 <input
                   id="gh-pat-input"
                   type="password"
                   value={githubPatInput}
                   onChange={(e) => setGithubPatInput(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  placeholder="Paste ghp_xxxxxxxxxxxxxxxxxxxx or github_pat_xxxxxxxxxxxx here..."
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
                 />
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  Click <strong>&ldquo;Open GitHub Token Auth Page in New Tab ↗&rdquo;</strong> above,
+                  scroll down and click <strong>Generate token</strong> on GitHub, then paste the token
+                  here and click <strong>Authenticate &amp; Push to ResuMetric.git</strong>.
+                </p>
               </div>
-              <div className="flex justify-end gap-2">
+
+              {/* Optional GitHub OAuth 2.0 App Configuration & Callback URLs */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowOAuthSetupFields(!showOAuthSetupFields)}
+                  className="w-full px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200/70 text-left font-bold text-slate-800 flex items-center justify-between cursor-pointer"
+                >
+                  <span>
+                    GitHub OAuth 2.0 App Callback URLs &amp; Client Credentials (Optional)
+                  </span>
+                  <span className="text-[11px] font-mono text-teal-700">
+                    {showOAuthSetupFields ? 'Hide ▲' : 'Configure OAuth App ▼'}
+                  </span>
+                </button>
+                {showOAuthSetupFields && (
+                  <div className="p-3.5 bg-white flex flex-col gap-3 border-t border-slate-200">
+                    <div className="text-[11px] text-slate-600 leading-relaxed">
+                      If you prefer OAuth App login via{' '}
+                      <a
+                        href="https://github.com/settings/developers"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-teal-700 font-semibold underline"
+                      >
+                        https://github.com/settings/developers
+                      </a>
+                      , register these exact Callback URLs:
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 font-mono text-[11px]">
+                      <div className="p-2 rounded bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                        <div className="truncate">
+                          <span className="font-sans font-bold text-slate-700">Dev Callback: </span>
+                          {githubAuthInfo.devCallbackUrl}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(githubAuthInfo.devCallbackUrl || '');
+                            showStatus('Copied Development OAuth Callback URL!');
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-sans font-semibold shrink-0"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <div className="p-2 rounded bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                        <div className="truncate">
+                          <span className="font-sans font-bold text-slate-700">
+                            Shared Callback:{' '}
+                          </span>
+                          {githubAuthInfo.sharedCallbackUrl}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(githubAuthInfo.sharedCallbackUrl || '');
+                            showStatus('Copied Shared OAuth Callback URL!');
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-sans font-semibold shrink-0"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label
+                          htmlFor="gh-client-id"
+                          className="block text-[11px] font-semibold text-slate-700 mb-1"
+                        >
+                          GitHub OAuth Client ID
+                        </label>
+                        <input
+                          id="gh-client-id"
+                          type="text"
+                          value={githubClientIdInput}
+                          onChange={(e) => setGithubClientIdInput(e.target.value)}
+                          placeholder="Ov23li..."
+                          className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="gh-client-secret"
+                          className="block text-[11px] font-semibold text-slate-700 mb-1"
+                        >
+                          GitHub OAuth Client Secret
+                        </label>
+                        <input
+                          id="gh-client-secret"
+                          type="password"
+                          value={githubClientSecretInput}
+                          onChange={(e) => setGithubClientSecretInput(e.target.value)}
+                          placeholder="Client Secret..."
+                          className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowGithubModal(false)}
-                  className="px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900"
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
                 >
-                  Close
+                  Back to Resume Builder
                 </button>
                 <button
                   type="submit"
+                  data-testid="github-submit-push-btn"
                   disabled={isPushingGithub}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60"
+                  className="px-5 py-2.5 rounded-xl text-xs font-extrabold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 shadow-sm cursor-pointer"
                 >
-                  {isPushingGithub ? 'Pushing to GitHub...' : 'Commit & Push to ResuMetric.git'}
+                  {isPushingGithub
+                    ? 'Authenticating & Pushing to GitHub...'
+                    : 'Authenticate & Push to ResuMetric.git'}
                 </button>
               </div>
             </form>

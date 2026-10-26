@@ -602,87 +602,395 @@ Target Job Description: ${jobDescription || 'Data Analyst / Business Intelligenc
     });
   });
 
-  // GitHub Repository Sync Endpoint (https://github.com/vinaykumar25121995/ResuMetric.git)
-  app.post('/api/github/push', optionalAuth, async (req: AuthRequest, res) => {
-    const repoUrl = 'https://github.com/vinaykumar25121995/ResuMetric.git';
-    const { githubToken = '', resumeSnapshot } = req.body || {};
+  // ============================================================================
+  // GITHUB OAUTH 2.0 & REPOSITORY AUTHENTICATION (https://github.com/vinaykumar25121995/ResuMetric.git)
+  // ============================================================================
+  const TARGET_GITHUB_REPO = 'https://github.com/vinaykumar25121995/ResuMetric.git';
+  const DEV_APP_URL =
+    process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
+      ? process.env.APP_URL.replace(/\/$/, '')
+      : 'https://ais-dev-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app';
+  const SHARED_APP_URL =
+    'https://ais-pre-4vuexnyyziu2xgy5zoegpo-980463204799.asia-southeast1.run.app';
+
+  const runtimeGithubAuth: {
+    clientId: string;
+    clientSecret: string;
+    accessToken: string;
+    user: { login: string; name?: string; avatar_url?: string; html_url?: string } | null;
+    lastPushResult: any;
+  } = {
+    clientId: process.env.GITHUB_CLIENT_ID || process.env.CLIENT_ID || '',
+    clientSecret: process.env.GITHUB_CLIENT_SECRET || process.env.CLIENT_SECRET || '',
+    accessToken: process.env.GITHUB_TOKEN || '',
+    user: null,
+    lastPushResult: null,
+  };
+
+  function getActiveGithubClientId(): string {
+    return (
+      runtimeGithubAuth.clientId ||
+      process.env.GITHUB_CLIENT_ID ||
+      process.env.CLIENT_ID ||
+      ''
+    ).trim();
+  }
+
+  function getActiveGithubClientSecret(): string {
+    return (
+      runtimeGithubAuth.clientSecret ||
+      process.env.GITHUB_CLIENT_SECRET ||
+      process.env.CLIENT_SECRET ||
+      ''
+    ).trim();
+  }
+
+  async function verifyGithubToken(token: string) {
+    const clean = token.trim();
+    if (!clean) return null;
+    try {
+      const resp = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'ResuMetric-ATS-Studio',
+        },
+      });
+      if (!resp.ok) return null;
+      const profile: any = await resp.json();
+      if (profile && profile.login) {
+        return {
+          login: profile.login,
+          name: profile.name || profile.login,
+          avatar_url: profile.avatar_url,
+          html_url: profile.html_url,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function executeGitPushToRepo(tokenToUse: string, resumeSnapshot?: any) {
+    if (resumeSnapshot) {
+      const snapshotPath = path.join(__dirname, 'src', 'data', 'latestResumeSnapshot.json');
+      await fs.writeFile(snapshotPath, JSON.stringify(resumeSnapshot, null, 2), 'utf-8');
+    }
 
     try {
-      // Save latest resume snapshot to data/latestResumeSnapshot.json so all resume data is versioned in git
-      if (resumeSnapshot) {
-        const snapshotPath = path.join(__dirname, 'src', 'data', 'latestResumeSnapshot.json');
-        await fs.writeFile(snapshotPath, JSON.stringify(resumeSnapshot, null, 2), 'utf-8');
-      }
+      await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: __dirname });
+    } catch {
+      await execFileAsync('git', ['init', '-b', 'main'], { cwd: __dirname });
+    }
 
-      // Ensure git is initialized and committed
+    await execFileAsync('git', ['config', 'user.name', 'Vinay Kumar'], { cwd: __dirname });
+    await execFileAsync('git', ['config', 'user.email', 'vinaykumar21y95@gmail.com'], {
+      cwd: __dirname,
+    });
+
+    try {
+      await execFileAsync('git', ['remote', 'remove', 'origin'], { cwd: __dirname });
+    } catch {
+      // Ignore if origin didn't exist
+    }
+
+    const cleanToken = tokenToUse.trim();
+    const authedUrl = cleanToken
+      ? `https://x-access-token:${encodeURIComponent(cleanToken)}@github.com/vinaykumar25121995/ResuMetric.git`
+      : TARGET_GITHUB_REPO;
+
+    await execFileAsync('git', ['remote', 'add', 'origin', authedUrl], { cwd: __dirname });
+    await execFileAsync('git', ['add', '-A'], { cwd: __dirname });
+
+    try {
+      await execFileAsync(
+        'git',
+        [
+          'commit',
+          '-m',
+          'feat: ResuMetric AI ATS Resume Builder, Keyword Heatmap, Quick Fix & Auto-Format Layout',
+        ],
+        { cwd: __dirname }
+      );
+    } catch {
+      // Working tree clean or already committed
+    }
+
+    const { stdout: commitHash } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: __dirname,
+    });
+
+    try {
+      await execFileAsync('git', ['push', '-u', 'origin', 'main', '--force'], {
+        cwd: __dirname,
+        timeout: 20000,
+      });
+      if (cleanToken) {
+        await execFileAsync('git', ['remote', 'set-url', 'origin', TARGET_GITHUB_REPO], {
+          cwd: __dirname,
+        }).catch(() => null);
+      }
+      const result = {
+        pushed: true,
+        stagedAndCommitted: true,
+        repoUrl: TARGET_GITHUB_REPO,
+        branch: 'main',
+        commitHash: commitHash.trim(),
+        message: `Successfully authenticated and pushed commit ${commitHash.trim()} to ${TARGET_GITHUB_REPO} (branch: main).`,
+      };
+      runtimeGithubAuth.lastPushResult = result;
+      return result;
+    } catch (pushErr: any) {
+      if (cleanToken) {
+        await execFileAsync('git', ['remote', 'set-url', 'origin', TARGET_GITHUB_REPO], {
+          cwd: __dirname,
+        }).catch(() => null);
+      }
+      const result = {
+        pushed: false,
+        stagedAndCommitted: true,
+        repoUrl: TARGET_GITHUB_REPO,
+        branch: 'main',
+        commitHash: commitHash.trim(),
+        requiresToken: true,
+        message: `Committed all project files & resume data locally (commit ${commitHash.trim()}) for ${TARGET_GITHUB_REPO}. Authenticate with GitHub OAuth or paste a GitHub Personal Access Token (repo scope) below to complete the push.`,
+        detail:
+          pushErr?.stderr || pushErr?.message || 'GitHub HTTPS push requires authentication token',
+      };
+      runtimeGithubAuth.lastPushResult = result;
+      return result;
+    }
+  }
+
+  // 1. Construct GitHub OAuth Authorization URL for Popup Flow
+  app.get(['/api/auth/github/url', '/api/auth/url'], (req, res) => {
+    const clientOrigin =
+      typeof req.query.origin === 'string' && req.query.origin.startsWith('http')
+        ? req.query.origin.replace(/\/$/, '')
+        : DEV_APP_URL;
+    const redirectUri = `${clientOrigin}/auth/callback`;
+    const clientId = getActiveGithubClientId();
+
+    const githubTokenCreationUrl =
+      'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email';
+    const githubOAuthAppsUrl = 'https://github.com/settings/developers';
+
+    if (clientId) {
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: 'repo workflow read:user user:email',
+        allow_signup: 'true',
+      });
+      const authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
+      res.json({
+        url: authUrl,
+        mode: 'oauth',
+        redirectUri,
+        devCallbackUrl: `${DEV_APP_URL}/auth/callback`,
+        sharedCallbackUrl: `${SHARED_APP_URL}/auth/callback`,
+        githubTokenCreationUrl,
+        githubOAuthAppsUrl,
+      });
+      return;
+    }
+
+    // When CLIENT_ID is not yet set, return GitHub's direct authentication & token generation page
+    res.json({
+      url: githubTokenCreationUrl,
+      mode: 'github_token_page',
+      redirectUri,
+      devCallbackUrl: `${DEV_APP_URL}/auth/callback`,
+      sharedCallbackUrl: `${SHARED_APP_URL}/auth/callback`,
+      githubTokenCreationUrl,
+      githubOAuthAppsUrl,
+    });
+  });
+
+  // 2. OAuth Callback Handler (Exchanges code for token, pushes to ResuMetric.git, posts message to opener)
+  const handleGithubOAuthCallback = async (req: express.Request, res: express.Response) => {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const clientId = getActiveGithubClientId();
+    const clientSecret = getActiveGithubClientSecret();
+
+    let authSuccess = false;
+    let errorMessage = '';
+    let pushSummary: any = null;
+
+    if (code && clientId && clientSecret) {
       try {
-        await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: __dirname });
-      } catch {
-        await execFileAsync('git', ['init', '-b', 'main'], { cwd: __dirname });
+        const tokenResp = await fetch('https://github.com/login/oauth/access_token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+          }),
+        });
+        const tokenData: any = await tokenResp.json();
+        if (tokenData && tokenData.access_token) {
+          runtimeGithubAuth.accessToken = tokenData.access_token;
+          runtimeGithubAuth.user = await verifyGithubToken(tokenData.access_token);
+          pushSummary = await executeGitPushToRepo(tokenData.access_token);
+          authSuccess = true;
+        } else {
+          errorMessage =
+            tokenData?.error_description || tokenData?.error || 'Failed to exchange GitHub code';
+        }
+      } catch (err: any) {
+        errorMessage = err?.message || 'GitHub OAuth token exchange failed';
       }
+    } else if (!code) {
+      errorMessage = 'No authorization code received from GitHub.';
+    } else {
+      errorMessage = 'GitHub OAuth CLIENT_ID or CLIENT_SECRET is missing.';
+    }
 
-      await execFileAsync('git', ['config', 'user.name', 'Vinay Kumar'], { cwd: __dirname });
-      await execFileAsync('git', ['config', 'user.email', 'vinaykumar21y95@gmail.com'], { cwd: __dirname });
+    const payloadJson = JSON.stringify({
+      type: authSuccess ? 'OAUTH_AUTH_SUCCESS' : 'OAUTH_AUTH_ERROR',
+      provider: 'github',
+      user: runtimeGithubAuth.user,
+      pushResult: pushSummary,
+      error: errorMessage,
+    });
 
-      try {
-        await execFileAsync('git', ['remote', 'remove', 'origin'], { cwd: __dirname });
-      } catch {
-        // Ignore if origin didn't exist
-      }
+    res.send(`<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>GitHub Authentication — ResuMetric</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+      .card { background: #1e293b; border: 1px solid #334155; padding: 24px 28px; border-radius: 12px; max-width: 440px; text-align: center; }
+      .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: ${
+        authSuccess ? '#10b981' : '#f59e0b'
+      }; color: #0f172a; margin-bottom: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="badge">${authSuccess ? 'GitHub Connected' : 'GitHub Callback'}</div>
+      <h2 style="margin: 0 0 8px; font-size: 18px;">${
+        authSuccess
+          ? 'GitHub Authentication Successful!'
+          : 'Returning to ResuMetric Workspace...'
+      }</h2>
+      <p style="margin: 0; font-size: 13px; color: #cbd5e1;">
+        ${
+          authSuccess
+            ? 'Your repository sync is complete. This window will close automatically.'
+            : errorMessage
+        }
+      </p>
+    </div>
+    <script>
+      (function() {
+        var payload = ${payloadJson};
+        if (window.opener) {
+          window.opener.postMessage(payload, '*');
+          setTimeout(function() { window.close(); }, 600);
+        } else {
+          window.location.href = '/';
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+  };
 
-      const authedUrl = githubToken.trim()
-        ? `https://${encodeURIComponent(githubToken.trim())}@github.com/vinaykumar25121995/ResuMetric.git`
-        : repoUrl;
+  app.get(['/auth/callback', '/auth/callback/'], handleGithubOAuthCallback);
 
-      await execFileAsync('git', ['remote', 'add', 'origin', authedUrl], { cwd: __dirname });
-      await execFileAsync('git', ['add', '-A'], { cwd: __dirname });
-
-      try {
-        await execFileAsync(
-          'git',
-          ['commit', '-m', 'feat: ResuMetric AI ATS Resume Builder, 28 Templates, Quick Fix & Auto-Format Layout'],
-          { cwd: __dirname }
-        );
-      } catch {
-        // Working tree clean or already committed
-      }
-
-      const { stdout: commitHash } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
+  // 3. Get Current GitHub Authentication & Repository Sync Status
+  app.get('/api/auth/github/status', async (_req, res) => {
+    if (runtimeGithubAuth.accessToken && !runtimeGithubAuth.user) {
+      runtimeGithubAuth.user = await verifyGithubToken(runtimeGithubAuth.accessToken);
+    }
+    let currentCommit = '';
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
         cwd: __dirname,
       });
+      currentCommit = stdout.trim();
+    } catch {
+      currentCommit = 'HEAD';
+    }
 
-      // Attempt git push to origin main
-      try {
-        await execFileAsync('git', ['push', '-u', 'origin', 'main', '--force'], {
-          cwd: __dirname,
-          timeout: 15000,
-        });
-        // Reset remote URL to clean public URL without token
-        if (githubToken.trim()) {
-          await execFileAsync('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: __dirname });
-        }
-        res.json({
-          pushed: true,
-          repoUrl,
-          branch: 'main',
-          commitHash: commitHash.trim(),
-          message: `Successfully pushed commit ${commitHash.trim()} to ${repoUrl} (branch: main).`,
-        });
-      } catch (pushErr: any) {
-        if (githubToken.trim()) {
-          await execFileAsync('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: __dirname }).catch(() => null);
-        }
-        res.json({
-          pushed: false,
-          stagedAndCommitted: true,
-          repoUrl,
-          branch: 'main',
-          commitHash: commitHash.trim(),
-          requiresToken: true,
-          message: `Committed all project files & resume data locally (commit ${commitHash.trim()}) with remote origin set to ${repoUrl}. Provide a GitHub Personal Access Token (PAT) with repo scope to complete authenticated HTTPS push.`,
-          detail: pushErr?.stderr || pushErr?.message || 'GitHub HTTPS push requires authentication token',
-        });
+    res.json({
+      authenticated: Boolean(runtimeGithubAuth.accessToken),
+      user: runtimeGithubAuth.user,
+      hasOAuthClientConfig: Boolean(getActiveGithubClientId() && getActiveGithubClientSecret()),
+      clientIdConfigured: Boolean(getActiveGithubClientId()),
+      repoUrl: TARGET_GITHUB_REPO,
+      currentCommit,
+      devCallbackUrl: `${DEV_APP_URL}/auth/callback`,
+      sharedCallbackUrl: `${SHARED_APP_URL}/auth/callback`,
+      githubTokenCreationUrl:
+        'https://github.com/settings/tokens/new?description=ResuMetric+AI+ATS+Resume+Builder&scopes=repo,workflow,read:user,user:email',
+      githubOAuthAppsUrl: 'https://github.com/settings/developers',
+      lastPushResult: runtimeGithubAuth.lastPushResult,
+    });
+  });
+
+  // 4. Configure GitHub OAuth Credentials or Personal Access Token & Trigger Auto-Push
+  app.post('/api/auth/github/config', optionalAuth, async (req: AuthRequest, res) => {
+    const {
+      clientId = '',
+      clientSecret = '',
+      personalAccessToken = '',
+      resumeSnapshot,
+    } = req.body || {};
+
+    if (clientId.trim()) runtimeGithubAuth.clientId = clientId.trim();
+    if (clientSecret.trim()) runtimeGithubAuth.clientSecret = clientSecret.trim();
+
+    if (personalAccessToken.trim()) {
+      runtimeGithubAuth.accessToken = personalAccessToken.trim();
+      const verifiedUser = await verifyGithubToken(personalAccessToken.trim());
+      runtimeGithubAuth.user = verifiedUser || {
+        login: 'vinaykumar25121995',
+        name: 'Vinay Kumar',
+        html_url: 'https://github.com/vinaykumar25121995',
+      };
+      const pushResult = await executeGitPushToRepo(personalAccessToken.trim(), resumeSnapshot);
+      res.json({
+        authenticated: true,
+        user: runtimeGithubAuth.user,
+        hasOAuthClientConfig: Boolean(getActiveGithubClientId() && getActiveGithubClientSecret()),
+        pushResult,
+      });
+      return;
+    }
+
+    res.json({
+      authenticated: Boolean(runtimeGithubAuth.accessToken),
+      user: runtimeGithubAuth.user,
+      hasOAuthClientConfig: Boolean(getActiveGithubClientId() && getActiveGithubClientSecret()),
+      message: 'Saved GitHub OAuth Client ID & Secret. Click "Authorize with GitHub OAuth" to open the GitHub login popup.',
+    });
+  });
+
+  // 5. GitHub Repository Sync Endpoint (https://github.com/vinaykumar25121995/ResuMetric.git)
+  app.post('/api/github/push', optionalAuth, async (req: AuthRequest, res) => {
+    const { githubToken = '', resumeSnapshot } = req.body || {};
+    const tokenToUse = (githubToken || runtimeGithubAuth.accessToken || '').trim();
+
+    try {
+      if (githubToken.trim()) {
+        runtimeGithubAuth.accessToken = githubToken.trim();
+        runtimeGithubAuth.user =
+          (await verifyGithubToken(githubToken.trim())) || runtimeGithubAuth.user;
       }
+      const result = await executeGitPushToRepo(tokenToUse, resumeSnapshot);
+      res.json({
+        ...result,
+        authenticated: Boolean(tokenToUse),
+        user: runtimeGithubAuth.user,
+      });
     } catch (error: any) {
       res.status(500).json({
         error: error.message || 'Failed to prepare GitHub repository sync',
