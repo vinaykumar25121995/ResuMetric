@@ -1,8 +1,10 @@
 import React from 'react';
 import {
+  AlertTriangle,
   Award,
   Briefcase,
   CheckCircle2,
+  Flame,
   FolderGit2,
   Github,
   Globe,
@@ -12,18 +14,22 @@ import {
   Mail,
   MapPin,
   Phone,
+  Plus,
   Sparkles,
   Wrench,
 } from 'lucide-react';
 import {
   ResumeData,
+  ResumeHeatmapAnalysis,
   ResumeSectionBoundary,
   ResumeTemplateConfig,
   SkillCategory,
 } from '../types/resume.ts';
 import {
+  calculateResumeKeywordHeatmap,
   getProficiencyIndicatorMeta,
   getSkillProficiency,
+  isBulletKeywordGap,
   parseSkillItems,
 } from '../utils/atsEngine.ts';
 
@@ -31,38 +37,151 @@ interface ResumeCanvasProps {
   resume: ResumeData;
   template: ResumeTemplateConfig;
   highlightKeywords?: string[];
+  heatmapActive?: boolean;
+  heatmapAnalysis?: ResumeHeatmapAnalysis;
+  onInjectGapKeyword?: (keyword: string) => void;
+  onInjectAllGapKeywords?: (keywords: string[]) => void;
+}
+
+let activeHeatmapRenderState: {
+  enabled: boolean;
+  targetKeywords: string[];
+  matchedKeywords: string[];
+  missingKeywords: string[];
+} = {
+  enabled: false,
+  targetKeywords: [],
+  matchedKeywords: [],
+  missingKeywords: [],
+};
+
+function escapeRegexChar(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightInlineHeatmapTokens(
+  rawSegment: string,
+  extraKeywords: string[] = []
+): React.ReactNode {
+  if (!activeHeatmapRenderState.enabled || !rawSegment) {
+    return rawSegment;
+  }
+
+  const keywordPool = Array.from(
+    new Set([
+      ...activeHeatmapRenderState.targetKeywords,
+      ...activeHeatmapRenderState.matchedKeywords,
+      ...extraKeywords,
+    ])
+  )
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0)
+    .sort((a, b) => b.length - a.length);
+
+  const kwPattern =
+    keywordPool.length > 0
+      ? `\\b(?:${keywordPool.map(escapeRegexChar).join('|')})\\b`
+      : null;
+  const metricPattern = `\\b\\d+(?:\\.\\d+)?%|\\b\\d+\\+|\\$\\d+(?:,\\d+)*(?:\\.\\d+)?[kmbKMB]?\\b`;
+
+  const combinedPattern = kwPattern ? `(${kwPattern}|${metricPattern})` : `(${metricPattern})`;
+  const regex = new RegExp(combinedPattern, 'gi');
+  const parts = rawSegment.split(regex);
+
+  if (parts.length <= 1) {
+    return rawSegment;
+  }
+
+  const kwLowerSet = new Set(keywordPool.map((k) => k.toLowerCase()));
+
+  return parts.map((part, idx) => {
+    if (!part) return null;
+    const lower = part.toLowerCase();
+    if (kwLowerSet.has(lower)) {
+      return (
+        <mark
+          key={idx}
+          data-testid="heatmap-keyword-hit"
+          className="bg-emerald-200/95 text-emerald-950 ring-1 ring-emerald-600/80 px-1 py-0.2 rounded-xs font-bold not-italic shadow-2xs"
+          title={`Matched Target Keyword: ${part} (High Density · Green)`}
+        >
+          {part}
+        </mark>
+      );
+    }
+    if (/^\d+(?:\.\d+)?%|^\d+\+|^\$\d+/i.test(part)) {
+      return (
+        <mark
+          key={idx}
+          data-testid="heatmap-metric-hit"
+          className="bg-amber-200/95 text-amber-950 ring-1 ring-amber-600/70 px-1 py-0.2 rounded-xs font-bold not-italic"
+          title={`Quantified ROI Impact Metric: ${part}`}
+        >
+          {part}
+        </mark>
+      );
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
+  });
 }
 
 export function renderFormattedText(
   text: string,
-  _highlightKeywords: string[] = []
+  highlightKeywords: string[] = []
 ): React.ReactNode {
   if (!text) return null;
   const segments = text.split(/(\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)/g);
-  return segments.map((seg, idx) => {
+  const renderedSegments = segments.map((seg, idx) => {
     if (seg.startsWith('**') && seg.endsWith('**')) {
       return (
         <strong key={idx} className="font-semibold text-slate-900">
-          {seg.slice(2, -2)}
+          {highlightInlineHeatmapTokens(seg.slice(2, -2), highlightKeywords)}
         </strong>
       );
     }
     if (seg.startsWith('__') && seg.endsWith('__')) {
       return (
         <span key={idx} className="underline decoration-slate-400 underline-offset-2">
-          {seg.slice(2, -2)}
+          {highlightInlineHeatmapTokens(seg.slice(2, -2), highlightKeywords)}
         </span>
       );
     }
     if (seg.startsWith('*') && seg.endsWith('*') && seg.length > 2) {
       return (
         <em key={idx} className="italic text-slate-800">
-          {seg.slice(1, -1)}
+          {highlightInlineHeatmapTokens(seg.slice(1, -1), highlightKeywords)}
         </em>
       );
     }
-    return <React.Fragment key={idx}>{seg}</React.Fragment>;
+    return (
+      <React.Fragment key={idx}>
+        {highlightInlineHeatmapTokens(seg, highlightKeywords)}
+      </React.Fragment>
+    );
   });
+
+  if (
+    activeHeatmapRenderState.enabled &&
+    text.trim().length >= 16 &&
+    text.trim().length <= 260 &&
+    isBulletKeywordGap(text, activeHeatmapRenderState.targetKeywords)
+  ) {
+    return (
+      <span className="bg-rose-50/90 ring-1 ring-rose-300/90 px-1 py-0.5 rounded-xs inline">
+        {renderedSegments}
+        <span
+          data-testid="heatmap-gap-indicator"
+          className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-rose-600 text-white text-[9.5px] font-extrabold uppercase tracking-tight shadow-2xs align-middle"
+          title="Red Heatmap Gap: This statement lacks target ATS keywords or quantified ROI metrics"
+        >
+          <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+          Keyword &amp; Metric Gap
+        </span>
+      </span>
+    );
+  }
+
+  return renderedSegments;
 }
 
 export function renderDarkFormattedText(text: string): React.ReactNode {
@@ -72,25 +191,25 @@ export function renderDarkFormattedText(text: string): React.ReactNode {
     if (seg.startsWith('**') && seg.endsWith('**')) {
       return (
         <strong key={idx} className="font-semibold text-white">
-          {seg.slice(2, -2)}
+          {highlightInlineHeatmapTokens(seg.slice(2, -2))}
         </strong>
       );
     }
     if (seg.startsWith('__') && seg.endsWith('__')) {
       return (
         <span key={idx} className="underline decoration-white/60 underline-offset-2">
-          {seg.slice(2, -2)}
+          {highlightInlineHeatmapTokens(seg.slice(2, -2))}
         </span>
       );
     }
     if (seg.startsWith('*') && seg.endsWith('*') && seg.length > 2) {
       return (
         <em key={idx} className="italic text-slate-100">
-          {seg.slice(1, -1)}
+          {highlightInlineHeatmapTokens(seg.slice(1, -1))}
         </em>
       );
     }
-    return <React.Fragment key={idx}>{seg}</React.Fragment>;
+    return <React.Fragment key={idx}>{highlightInlineHeatmapTokens(seg)}</React.Fragment>;
   });
 }
 
@@ -267,15 +386,28 @@ const SkillProficiencyVisualList: React.FC<{
       {skills.map((skillName, idx) => {
         const level = getSkillProficiency(category, skillName);
         const meta = getProficiencyIndicatorMeta(level);
+        const heatmapOn = activeHeatmapRenderState.enabled;
+        const heatmapSkillClass = heatmapOn
+          ? level === 'Expert'
+            ? isDark
+              ? 'bg-emerald-500/25 border-emerald-400 text-white ring-1 ring-emerald-400/60'
+              : 'bg-emerald-50 border-emerald-500 text-emerald-950 ring-1 ring-emerald-500/40'
+            : level === 'Proficient'
+            ? isDark
+              ? 'bg-amber-500/25 border-amber-400 text-white ring-1 ring-amber-400/60'
+              : 'bg-amber-50 border-amber-500 text-amber-950 ring-1 ring-amber-500/40'
+            : isDark
+            ? 'bg-rose-500/30 border-rose-400 text-white ring-1 ring-rose-400/70'
+            : 'bg-rose-50 border-rose-500 text-rose-950 ring-1 ring-rose-500/40'
+          : isDark
+          ? 'bg-black/20 border-white/20 text-white'
+          : 'bg-white border-slate-200 text-slate-800';
+
         return (
           <span
             key={`${skillName}-${idx}`}
             data-testid="skill-proficiency-indicator"
-            className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10.5px] border ${
-              isDark
-                ? 'bg-black/20 border-white/20 text-white'
-                : 'bg-white border-slate-200 text-slate-800'
-            }`}
+            className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10.5px] border ${heatmapSkillClass}`}
           >
             <span className="font-medium">{skillName}</span>
             <span
@@ -289,7 +421,13 @@ const SkillProficiencyVisualList: React.FC<{
                   style={{
                     backgroundColor:
                       dot <= meta.dots
-                        ? isDark
+                        ? heatmapOn
+                          ? level === 'Expert'
+                            ? '#10b981'
+                            : level === 'Proficient'
+                            ? '#f59e0b'
+                            : '#ef4444'
+                          : isDark
                           ? '#ffffff'
                           : accentColor
                         : isDark
@@ -314,6 +452,258 @@ const SkillProficiencyVisualList: React.FC<{
 };
 
 export const ResumeCanvas: React.FC<ResumeCanvasProps> = ({
+  resume,
+  template,
+  highlightKeywords = [],
+  heatmapActive = false,
+  heatmapAnalysis,
+  onInjectGapKeyword,
+  onInjectAllGapKeywords,
+}) => {
+  const analysis =
+    heatmapAnalysis || calculateResumeKeywordHeatmap(resume);
+
+  activeHeatmapRenderState = {
+    enabled: Boolean(heatmapActive),
+    targetKeywords: analysis.targetKeywords,
+    matchedKeywords:
+      highlightKeywords.length > 0 ? highlightKeywords : analysis.matchedKeywords,
+    missingKeywords: analysis.missingKeywords,
+  };
+
+  const overallBandStyles =
+    analysis.overallBand === 'high'
+      ? {
+          badgeBg: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50',
+          ringClass: 'ring-2 ring-emerald-500/70',
+          label: 'High Density (Green)',
+        }
+      : analysis.overallBand === 'medium'
+      ? {
+          badgeBg: 'bg-amber-500/20 text-amber-300 border-amber-400/50',
+          ringClass: 'ring-2 ring-amber-500/70',
+          label: 'Moderate Density (Amber)',
+        }
+      : {
+          badgeBg: 'bg-rose-500/25 text-rose-300 border-rose-400/60',
+          ringClass: 'ring-2 ring-rose-500/80',
+          label: 'Keyword Gap Alert (Red)',
+        };
+
+  return (
+    <div className="relative w-full max-w-[850px] mx-auto flex flex-col gap-3">
+      {heatmapActive && (
+        <div
+          data-testid="resume-keyword-heatmap-overlay"
+          data-overall-band={analysis.overallBand}
+          className="no-print rounded-xl bg-slate-900 text-white p-4 border border-slate-700 shadow-lg flex flex-col gap-3.5"
+        >
+          {/* Top Header & Green-to-Red Color Scale Spectrum */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 via-amber-500 to-rose-500 flex items-center justify-center text-slate-950 font-black shadow-xs">
+                <Flame className="w-4 h-4 text-white" />
+              </span>
+              <div>
+                <div className="text-xs font-extrabold tracking-wide uppercase flex items-center gap-2">
+                  <span>Keyword Heatmap Visual Overlay</span>
+                  <span
+                    data-testid="heatmap-overall-score-badge"
+                    className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold border ${overallBandStyles.badgeBg}`}
+                  >
+                    {analysis.overallDensityScore}% · {overallBandStyles.label}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  Inline document highlights:{' '}
+                  <span className="text-emerald-300 font-semibold">
+                    {analysis.matchedKeywords.length} matched keywords ({analysis.totalKeywordHits} hits)
+                  </span>{' '}
+                  ·{' '}
+                  <span className="text-rose-300 font-semibold">
+                    {analysis.missingKeywords.length} missing keyword gaps
+                  </span>{' '}
+                  ·{' '}
+                  <span
+                    className={
+                      analysis.gapBulletsCount > 0
+                        ? 'text-rose-300 font-semibold'
+                        : 'text-emerald-300 font-semibold'
+                    }
+                  >
+                    {analysis.gapBulletsCount} unquantified/weak bullet gaps
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            {/* Color Scale Legend Pills (Green -> Amber -> Red) */}
+            <div
+              data-testid="heatmap-color-scale-legend"
+              className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-semibold"
+            >
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-950/90 border border-emerald-500/60 text-emerald-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                Green (≥75% Optimal)
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-950/90 border border-amber-500/60 text-amber-200">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                Amber (45–74% Moderate)
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-rose-950/90 border border-rose-500/60 text-rose-200">
+                <span className="w-2 h-2 rounded-full bg-rose-500" />
+                Red (&lt;45% Keyword Gap)
+              </span>
+            </div>
+          </div>
+
+          {/* Continuous Red-to-Amber-to-Green Spectrum Bar with Live Marker */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span className="text-rose-400 font-semibold">0% Critical Gap (Red)</span>
+              <span className="text-amber-300 font-semibold">50% Moderate (Amber)</span>
+              <span className="text-emerald-400 font-semibold">100% Optimal Density (Green)</span>
+            </div>
+            <div className="relative h-2.5 w-full rounded-full overflow-visible bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500 shadow-inner">
+              <div
+                data-testid="heatmap-spectrum-marker"
+                className="absolute -top-1 w-4 h-4 rounded-full bg-white border-2 border-slate-900 shadow-md -translate-x-1/2 transition-all"
+                style={{ left: `${Math.max(4, Math.min(96, analysis.overallDensityScore))}%` }}
+                title={`Current Resume Keyword Density: ${analysis.overallDensityScore}%`}
+              />
+            </div>
+          </div>
+
+          {/* 5 Section-by-Section Green-to-Red Density Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+            {analysis.sections.map((sec) => {
+              const cardTheme =
+                sec.band === 'high'
+                  ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-100'
+                  : sec.band === 'medium'
+                  ? 'bg-amber-950/60 border-amber-500/60 text-amber-100'
+                  : 'bg-rose-950/70 border-rose-500/70 text-rose-100';
+
+              const badgeColor =
+                sec.band === 'high'
+                  ? 'bg-emerald-500 text-slate-950'
+                  : sec.band === 'medium'
+                  ? 'bg-amber-400 text-slate-950'
+                  : 'bg-rose-500 text-white';
+
+              return (
+                <div
+                  key={sec.sectionId}
+                  data-testid={`heatmap-section-${sec.sectionId}`}
+                  data-band={sec.band}
+                  className={`p-2.5 rounded-lg border flex flex-col justify-between gap-1.5 text-[11px] ${cardTheme}`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-bold truncate text-white">{sec.label}</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded font-mono text-[10px] font-extrabold shrink-0 ${badgeColor}`}
+                      >
+                        {sec.densityScore}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-black/40 rounded-full overflow-hidden mt-1.5">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${sec.densityScore}%`,
+                          backgroundColor: sec.colorHex,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-[10px] leading-snug opacity-90">
+                    {sec.diagnosticNote}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Red Missing Keyword Gaps Callout + One-Click Inject Controls */}
+          {analysis.missingKeywords.length > 0 && (
+            <div
+              data-testid="heatmap-missing-gaps-bar"
+              className="p-2.5 rounded-lg bg-rose-950/80 border border-rose-500/60 flex flex-wrap items-center justify-between gap-2 text-xs"
+            >
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-rose-200 flex items-center gap-1 text-[11px]">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  Red Keyword Gaps Detected on Canvas:
+                </span>
+                {analysis.missingKeywords.slice(0, 6).map((gapKw) => (
+                  <button
+                    key={gapKw}
+                    type="button"
+                    data-testid="heatmap-missing-keyword-chip"
+                    onClick={() => onInjectGapKeyword && onInjectGapKeyword(gapKw)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[11px] shadow-2xs transition-colors cursor-pointer"
+                    title={`Click to inject missing keyword "${gapKw}" directly into your resume`}
+                  >
+                    <Plus className="w-3 h-3" />
+                    {gapKw}
+                  </button>
+                ))}
+              </div>
+              {onInjectAllGapKeywords && analysis.missingKeywords.length > 1 && (
+                <button
+                  type="button"
+                  data-testid="heatmap-inject-all-btn"
+                  onClick={() => onInjectAllGapKeywords(analysis.missingKeywords)}
+                  className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-[11px] transition-colors shrink-0 cursor-pointer"
+                >
+                  + Inject All {analysis.missingKeywords.length} Gap Keywords
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Document Canvas Container with Floating Right-Edge Section Heatmap Rail */}
+      <div className={`relative ${heatmapActive ? `${overallBandStyles.ringClass} rounded-xs` : ''}`}>
+        {heatmapActive && (
+          <div
+            data-testid="heatmap-canvas-section-rail"
+            className="no-print hidden xl:flex flex-col gap-2 absolute top-6 right-2 z-20 pointer-events-none"
+          >
+            {analysis.sections.map((sec) => (
+              <div
+                key={sec.sectionId}
+                className="px-2 py-1 rounded-md shadow-sm border text-[10px] font-mono font-bold flex items-center gap-1.5 backdrop-blur-xs bg-white/95 text-slate-900"
+                style={{ borderColor: sec.colorHex }}
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: sec.colorHex }}
+                />
+                <span>{sec.label}:</span>
+                <span style={{ color: sec.colorHex }}>{sec.densityScore}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <ResumeLayoutCore
+          resume={resume}
+          template={template}
+          highlightKeywords={
+            heatmapActive
+              ? analysis.targetKeywords
+              : highlightKeywords
+          }
+        />
+      </div>
+    </div>
+  );
+};
+
+const ResumeLayoutCore: React.FC<ResumeCanvasProps> = ({
   resume,
   template,
   highlightKeywords = [],

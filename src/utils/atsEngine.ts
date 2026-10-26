@@ -1,12 +1,15 @@
 import {
   AtsScoreBreakdown,
   AutoFormatLayoutAnalysis,
+  HeatmapBand,
   QuickFixReport,
   ResumeData,
+  ResumeHeatmapAnalysis,
   ResumeSectionBoundary,
   ResumeTemplateConfig,
   SectionDividerItem,
   SectionDividerStyle,
+  SectionHeatmapMetrics,
   SkillCategory,
   SkillProficiencyLevel,
 } from '../types/resume.ts';
@@ -964,6 +967,301 @@ export function analyzeContentVolumeAndSuggestLayout(
   };
 }
 
+/**
+ * Maps a 0-100 keyword density score to a Green-to-Red heatmap band and color hex.
+ */
+export function getHeatmapBandMeta(score: number): {
+  band: HeatmapBand;
+  colorHex: string;
+  label: string;
+} {
+  if (score >= 75) {
+    return {
+      band: 'high',
+      colorHex: '#10b981', // Emerald Green
+      label: 'Optimal Keyword Density',
+    };
+  }
+  if (score >= 45) {
+    return {
+      band: 'medium',
+      colorHex: '#f59e0b', // Amber Yellow
+      label: 'Moderate Density',
+    };
+  }
+  return {
+    band: 'low',
+    colorHex: '#ef4444', // Rose Red
+    label: 'Critical Keyword Gap',
+  };
+}
 
+function escapeRegExpForHeatmap(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
+function countKeywordHitsInText(text: string, keyword: string): number {
+  if (!text || !keyword) return 0;
+  const escaped = escapeRegExpForHeatmap(keyword.trim());
+  if (!escaped) return 0;
+  const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
+  const matches = text.match(regex);
+  return matches ? matches.length : 0;
+}
 
+/**
+ * Determines if an individual experience or project bullet point has a keyword or quantified impact gap.
+ */
+export function isBulletKeywordGap(bulletText: string, targetKeywords: string[] = []): boolean {
+  const cleaned = (bulletText || '').replace(/\*\*|__|\*/g, '').trim();
+  if (!cleaned) return true;
+
+  // Passive / weak bullet openings or known unoptimized typos indicate an immediate red gap
+  if (
+    /^(worked on|helped with|responsible for|did some|made charts|assisted with|handled|tasked with)\b/i.test(
+      cleaned
+    ) ||
+    /\b(teh|recieve|seperate|occured)\b/i.test(cleaned)
+  ) {
+    return true;
+  }
+
+  const effectiveKeywords = Array.from(
+    new Set([
+      ...(targetKeywords.length > 0 ? targetKeywords : BENCHMARK_KEYWORDS_BY_ROLE.default),
+      ...CURATED_TECH_DOMAIN_VOCAB,
+    ])
+  );
+
+  const hasTargetKeyword = effectiveKeywords.some(
+    (kw) => countKeywordHitsInText(cleaned, kw) > 0
+  );
+  const hasQuantifiedMetric =
+    /\b\d+(?:\.\d+)?%|\b\d+\+|\$\d+|\b\d+\s*(?:records|rows|dashboards|models|clients|users|hours|days|months|segments|features|variables)\b/i.test(
+      cleaned
+    );
+  const firstWord = cleaned
+    .split(/\s+/)[0]
+    ?.replace(/[^a-zA-Z]/g, '')
+    .toLowerCase();
+  const hasStrongVerbAndSubstance =
+    Boolean(firstWord && STRONG_ACTION_VERBS.includes(firstWord)) &&
+    cleaned.split(/\s+/).length >= 6;
+
+  // If a bullet has neither a target/domain keyword, nor a quantified metric, nor strong action-verb substance, flag it as a red gap
+  return !hasTargetKeyword && !hasQuantifiedMetric && !hasStrongVerbAndSubstance;
+}
+
+/**
+ * Computes a comprehensive Green-to-Red Keyword Heatmap analysis across the entire resume
+ * and each individual section (Summary, Experience, Projects, Skills, Edu & Certs).
+ */
+export function calculateResumeKeywordHeatmap(
+  resume: ResumeData,
+  jobDescription?: string
+): ResumeHeatmapAnalysis {
+  const jdTrimmed = (jobDescription || '').trim();
+  const extractedJdKeywords = jdTrimmed ? extractKeywordsFromJobDescription(jdTrimmed) : [];
+
+  const targetKeywords =
+    extractedJdKeywords.length >= 3
+      ? extractedJdKeywords
+      : [...BENCHMARK_KEYWORDS_BY_ROLE.default];
+
+  const summaryText = resume.summary || '';
+  const experienceText = resume.experiences
+    .map((e) => `${e.role} ${e.company} ${e.bullets.join(' ')}`)
+    .join(' ');
+  const projectsText = resume.projects
+    .map((p) => `${p.title} ${p.techTag} ${p.bullets.join(' ')}`)
+    .join(' ');
+  const skillsText = resume.skills.map((s) => `${s.category} ${s.items}`).join(' ');
+  const credentialsText = [
+    ...resume.education.map((e) => `${e.degree} ${e.institution}`),
+    ...resume.certificates.map((c) => c.name),
+    ...resume.languages.map((l) => `${l.language} ${l.proficiency}`),
+  ].join(' ');
+
+  const fullText = [
+    resume.jobTitle,
+    summaryText,
+    experienceText,
+    projectsText,
+    skillsText,
+    credentialsText,
+  ].join(' ');
+
+  const keywordFrequencyMap: Record<string, number> = {};
+  const matchedKeywords: string[] = [];
+  const missingKeywords: string[] = [];
+  let totalKeywordHits = 0;
+
+  for (const kw of targetKeywords) {
+    const count = countKeywordHitsInText(fullText, kw);
+    keywordFrequencyMap[kw] = count;
+    totalKeywordHits += count;
+    if (count > 0) {
+      matchedKeywords.push(kw);
+    } else {
+      missingKeywords.push(kw);
+    }
+  }
+
+  // Also include high-value stretch ATS keywords in missing suggestions if the resume currently matches 100% of baseline
+  const stretchBenchmarkGaps = ['Power BI', 'Snowflake', 'A/B Testing', 'ETL', 'BigQuery'].filter(
+    (kw) => countKeywordHitsInText(fullText, kw) === 0 && !missingKeywords.includes(kw)
+  );
+
+  const expBullets = resume.experiences.flatMap((e) => e.bullets);
+  const projBullets = resume.projects.flatMap((p) => p.bullets);
+  const expGapBullets = expBullets.filter((b) => isBulletKeywordGap(b, targetKeywords)).length;
+  const projGapBullets = projBullets.filter((b) => isBulletKeywordGap(b, targetKeywords)).length;
+
+  const totalBulletsCount = expBullets.length + projBullets.length;
+  const gapBulletsCount = expGapBullets + projGapBullets;
+
+  const countWords = (str: string) =>
+    str
+      .replace(/\*\*|__|\*/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length;
+
+  const evaluateSection = (
+    sectionId: SectionHeatmapMetrics['sectionId'],
+    label: string,
+    text: string,
+    expectedDistinctKeywords: number,
+    sectionGapBullets: number,
+    sectionTotalBullets: number
+  ): SectionHeatmapMetrics => {
+    const sectionMatched: string[] = [];
+    let sectionHits = 0;
+
+    for (const kw of targetKeywords) {
+      const c = countKeywordHitsInText(text, kw);
+      if (c > 0) {
+        sectionMatched.push(kw);
+        sectionHits += c;
+      }
+    }
+
+    const wordCount = countWords(text);
+    const keywordCoverageRatio = Math.min(
+      1,
+      sectionMatched.length / Math.max(1, expectedDistinctKeywords)
+    );
+    const hitDepthBonus = Math.min(20, sectionHits * 3);
+
+    let rawScore = Math.round(keywordCoverageRatio * 82 + hitDepthBonus);
+
+    if (sectionTotalBullets > 0) {
+      const healthyBulletRatio =
+        (sectionTotalBullets - sectionGapBullets) / Math.max(1, sectionTotalBullets);
+      rawScore = Math.round(rawScore * 0.65 + healthyBulletRatio * 35);
+      if (sectionGapBullets > 0 && sectionGapBullets >= sectionTotalBullets / 2) {
+        rawScore = Math.min(rawScore, 42); // Force into red band when >=50% of bullets have gaps
+      }
+    }
+
+    if (wordCount < 8) {
+      rawScore = Math.min(rawScore, 35);
+    }
+
+    const densityScore = Math.max(12, Math.min(99, rawScore));
+    const meta = getHeatmapBandMeta(densityScore);
+
+    // Suggest missing keywords for this specific section
+    const sectionMissingPool =
+      missingKeywords.length > 0
+        ? missingKeywords
+        : [
+            ...targetKeywords.filter((kw) => !sectionMatched.includes(kw)),
+            ...stretchBenchmarkGaps,
+          ];
+    const missingSuggestedKeywords = sectionMissingPool.slice(0, 4);
+
+    const diagnosticNote =
+      meta.band === 'high'
+        ? `Strong density (${sectionMatched.length} keywords, ${sectionHits} total hits)${
+            sectionGapBullets === 0 && sectionTotalBullets > 0 ? ', 0 bullet gaps' : ''
+          }.`
+        : meta.band === 'medium'
+        ? `Moderate coverage (${sectionMatched.length} keywords). Add ${
+            missingSuggestedKeywords.slice(0, 2).join(', ') || 'domain terms'
+          } to reach green.`
+        : `Critical keyword gap (${sectionMatched.length} keywords${
+            sectionGapBullets > 0 ? `, ${sectionGapBullets} weak bullets` : ''
+          }). Inject ${missingSuggestedKeywords.slice(0, 2).join(', ') || 'core skills'}.`;
+
+    return {
+      sectionId,
+      label,
+      densityScore,
+      band: meta.band,
+      colorHex: meta.colorHex,
+      matchedKeywords: sectionMatched,
+      missingSuggestedKeywords,
+      keywordHitCount: sectionHits,
+      wordCount,
+      gapBulletsCount: sectionGapBullets,
+      totalBulletsCount: sectionTotalBullets,
+      diagnosticNote,
+    };
+  };
+
+  const sections: SectionHeatmapMetrics[] = [
+    evaluateSection('summary', 'Executive Summary', summaryText, 4, 0, 0),
+    evaluateSection(
+      'experience',
+      'Work Experience',
+      experienceText,
+      6,
+      expGapBullets,
+      expBullets.length
+    ),
+    evaluateSection(
+      'projects',
+      'Key Projects',
+      projectsText,
+      5,
+      projGapBullets,
+      projBullets.length
+    ),
+    evaluateSection('skills', 'Technical Skills', skillsText, 8, 0, 0),
+    evaluateSection('credentials', 'Edu & Certifications', credentialsText, 2, 0, 0),
+  ];
+
+  // Weighted average across sections, with extra weight on Experience, Skills, and Projects
+  const weightedSum =
+    sections[0].densityScore * 0.18 +
+    sections[1].densityScore * 0.32 +
+    sections[2].densityScore * 0.22 +
+    sections[3].densityScore * 0.2 +
+    sections[4].densityScore * 0.08;
+
+  const overallAlignmentRatio = matchedKeywords.length / Math.max(1, targetKeywords.length);
+  let overallDensityScore = Math.round(weightedSum * 0.65 + overallAlignmentRatio * 35);
+
+  if (gapBulletsCount >= 3 && gapBulletsCount >= totalBulletsCount / 2) {
+    overallDensityScore = Math.min(overallDensityScore, 42);
+  }
+
+  overallDensityScore = Math.max(15, Math.min(99, overallDensityScore));
+  const overallMeta = getHeatmapBandMeta(overallDensityScore);
+
+  return {
+    overallDensityScore,
+    overallBand: overallMeta.band,
+    overallColorHex: overallMeta.colorHex,
+    targetKeywords,
+    matchedKeywords,
+    missingKeywords:
+      missingKeywords.length > 0 ? missingKeywords : stretchBenchmarkGaps.slice(0, 4),
+    keywordFrequencyMap,
+    totalKeywordHits,
+    gapBulletsCount,
+    totalBulletsCount,
+    sections,
+  };
+}

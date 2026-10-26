@@ -7,6 +7,7 @@ import {
   Download,
   Eye,
   FileCheck2,
+  Flame,
   Globe,
   GripVertical,
   LayoutTemplate,
@@ -37,6 +38,7 @@ import {
   analyzeContentVolumeAndSuggestLayout,
   applyQuickFixToResume,
   calculateAtsScore,
+  calculateResumeKeywordHeatmap,
   createLowScoreDraftResume,
   getLanguageLevelPercent,
   getProficiencyIndicatorMeta,
@@ -128,6 +130,7 @@ export default function App() {
 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
+  const [isHeatmapActive, setIsHeatmapActive] = useState(false);
   const [statusBanner, setStatusBanner] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
   const [categorySuggestions, setCategorySuggestions] = useState<Record<string, string[]>>({});
@@ -323,6 +326,24 @@ export default function App() {
     () => calculateAtsScore(resume, jobDescription),
     [resume, jobDescription]
   );
+
+  // Real-Time Keyword Heatmap Analysis (Green-to-Red Density & Gaps)
+  const heatmapAnalysis = useMemo(
+    () => calculateResumeKeywordHeatmap(resume, jobDescription),
+    [resume, jobDescription]
+  );
+
+  const handleInjectGapKeywordFromHeatmap = (keyword: string) => {
+    const updated = injectKeywordsIntoResume(resume, [keyword]);
+    setResume(updated);
+    showStatus(`Injected missing keyword "${keyword}" into your resume from Keyword Heatmap!`);
+  };
+
+  const handleInjectAllGapKeywordsFromHeatmap = (keywords: string[]) => {
+    const updated = injectKeywordsIntoResume(resume, keywords);
+    setResume(updated);
+    showStatus(`Injected ${keywords.length} missing gap keywords into your resume!`);
+  };
 
   const fetchBootstrapData = async () => {
     try {
@@ -873,6 +894,27 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="scorecard-keyword-heatmap-btn"
+                      onClick={() => {
+                        const next = !isHeatmapActive;
+                        setIsHeatmapActive(next);
+                        showStatus(
+                          next
+                            ? `Enabled Keyword Heatmap overlay (${heatmapAnalysis.overallDensityScore}% density · Green-to-Red scale)`
+                            : 'Disabled Keyword Heatmap overlay'
+                        );
+                      }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap inline-flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer ${
+                        isHeatmapActive
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300'
+                      }`}
+                    >
+                      <Flame className="w-3.5 h-3.5 text-amber-500" />
+                      Keyword Heatmap
+                    </button>
                     <button
                       type="button"
                       data-testid="auto-format-layout-btn"
@@ -2577,7 +2619,45 @@ export default function App() {
                   <span>·</span>
                   <span className="uppercase font-mono text-teal-700">{activeLanguage}</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="toggle-keyword-heatmap-btn"
+                    aria-pressed={isHeatmapActive}
+                    onClick={() => {
+                      const next = !isHeatmapActive;
+                      setIsHeatmapActive(next);
+                      showStatus(
+                        next
+                          ? `Activated Keyword Heatmap visual overlay (${heatmapAnalysis.overallDensityScore}% density)`
+                          : 'Hidden Keyword Heatmap visual overlay'
+                      );
+                    }}
+                    className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      isHeatmapActive
+                        ? 'bg-slate-900 text-white ring-2 ring-emerald-500/80'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300'
+                    }`}
+                  >
+                    <Flame
+                      className={`w-3.5 h-3.5 ${
+                        isHeatmapActive ? 'text-emerald-400' : 'text-emerald-600'
+                      }`}
+                    />
+                    <span>Keyword Heatmap</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                        heatmapAnalysis.overallBand === 'high'
+                          ? 'bg-emerald-500 text-slate-950'
+                          : heatmapAnalysis.overallBand === 'medium'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-rose-500 text-white'
+                      }`}
+                    >
+                      {heatmapAnalysis.overallDensityScore}%
+                    </span>
+                  </button>
+                  <span className="text-slate-300">|</span>
                   <button
                     type="button"
                     onClick={() => setIsPrintPreviewOpen(true)}
@@ -2611,6 +2691,10 @@ export default function App() {
                 resume={resume}
                 template={selectedTemplate}
                 highlightKeywords={atsBreakdown.matchedKeywords}
+                heatmapActive={isHeatmapActive}
+                heatmapAnalysis={heatmapAnalysis}
+                onInjectGapKeyword={handleInjectGapKeywordFromHeatmap}
+                onInjectAllGapKeywords={handleInjectAllGapKeywordsFromHeatmap}
               />
             </div>
           </div>

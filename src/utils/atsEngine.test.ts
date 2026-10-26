@@ -5,12 +5,15 @@ import {
   analyzeContentVolumeAndSuggestLayout,
   applyQuickFixToResume,
   calculateAtsScore,
+  calculateResumeKeywordHeatmap,
   createLowScoreDraftResume,
   extractKeywordsFromJobDescription,
+  getHeatmapBandMeta,
   getLanguageLevelPercent,
   getProficiencyIndicatorMeta,
   getSkillProficiency,
   injectKeywordsIntoResume,
+  isBulletKeywordGap,
   parsePlainTextResume,
   parseSkillItems,
   removeSectionDivider,
@@ -160,7 +163,46 @@ test('analyzeContentVolumeAndSuggestLayout suggests Dense Content for high volum
   assert.ok(minimalistAnalysis.compactDensityApplied === false);
 });
 
+test('calculateResumeKeywordHeatmap and isBulletKeywordGap compute green-to-red density bands and detect keyword gaps', () => {
+  const highMeta = getHeatmapBandMeta(85);
+  assert.equal(highMeta.band, 'high');
+  assert.equal(highMeta.colorHex, '#10b981');
 
+  const medMeta = getHeatmapBandMeta(60);
+  assert.equal(medMeta.band, 'medium');
+  assert.equal(medMeta.colorHex, '#f59e0b');
 
+  const lowMeta = getHeatmapBandMeta(30);
+  assert.equal(lowMeta.band, 'low');
+  assert.equal(lowMeta.colorHex, '#ef4444');
 
+  // High-density default resume should achieve 'high' (green) overall density
+  const highHeatmap = calculateResumeKeywordHeatmap(DEFAULT_VINAY_RESUME);
+  assert.equal(highHeatmap.overallBand, 'high');
+  assert.ok(highHeatmap.overallDensityScore >= 75, `Expected overallDensityScore >= 75, got ${highHeatmap.overallDensityScore}`);
+  assert.ok(highHeatmap.gapBulletsCount <= 2, `Expected <= 2 gap bullets on default resume, got ${highHeatmap.gapBulletsCount}`);
+  assert.equal(highHeatmap.sections.length, 5);
 
+  // With Senior Data Analyst JD, missing JD keywords like Power BI and Snowflake are surfaced as gaps
+  const jdHeatmap = calculateResumeKeywordHeatmap(
+    DEFAULT_VINAY_RESUME,
+    SAMPLE_JOB_DESCRIPTIONS[0].description
+  );
+  assert.ok(jdHeatmap.missingKeywords.includes('Power BI'));
+  assert.ok(jdHeatmap.missingKeywords.includes('Snowflake'));
+
+  // Low-score unoptimized draft should be classified as 'low' (red) with multiple bullet gaps
+  const lowDraft = createLowScoreDraftResume(DEFAULT_VINAY_RESUME);
+  const lowHeatmap = calculateResumeKeywordHeatmap(lowDraft);
+  assert.equal(lowHeatmap.overallBand, 'low');
+  assert.ok(lowHeatmap.overallDensityScore < 45, `Expected low density < 45, got ${lowHeatmap.overallDensityScore}`);
+  assert.ok(lowHeatmap.gapBulletsCount >= 3, `Expected >= 3 gap bullets, got ${lowHeatmap.gapBulletsCount}`);
+  assert.equal(isBulletKeywordGap('worked on teh data tables for team', ['SQL', 'Python']), true);
+  assert.equal(
+    isBulletKeywordGap(
+      'Engineered **SQL** pipelines reducing product damage by **75%**.',
+      ['SQL', 'Python']
+    ),
+    false
+  );
+});

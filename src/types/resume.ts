@@ -127,6 +127,37 @@ export interface AtsScoreBreakdown {
   recommendations: string[];
 }
 
+export type HeatmapBand = 'high' | 'medium' | 'low';
+
+export interface SectionHeatmapMetrics {
+  sectionId: 'summary' | 'experience' | 'projects' | 'skills' | 'credentials';
+  label: string;
+  densityScore: number;
+  band: HeatmapBand;
+  colorHex: string;
+  matchedKeywords: string[];
+  missingSuggestedKeywords: string[];
+  keywordHitCount: number;
+  wordCount: number;
+  gapBulletsCount: number;
+  totalBulletsCount: number;
+  diagnosticNote: string;
+}
+
+export interface ResumeHeatmapAnalysis {
+  overallDensityScore: number;
+  overallBand: HeatmapBand;
+  overallColorHex: string;
+  targetKeywords: string[];
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  keywordFrequencyMap: Record<string, number>;
+  totalKeywordHits: number;
+  gapBulletsCount: number;
+  totalBulletsCount: number;
+  sections: SectionHeatmapMetrics[];
+}
+
 export type TemplateLayoutStyle =
   | 'nordic-sidebar-left'      // Uploaded PDF #1: Dark slate left sidebar, teal circle icons & diamonds
   | 'navy-gold-banner'         // Uploaded PDF #2: Dark navy top banner, gold role & photo ring, dark skill blocks
